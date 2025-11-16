@@ -859,25 +859,23 @@ app.post("/sendMessage", verifyToken, async (req, res) => {
     if (!receiverId || !message) 
       return res.status(400).json({ error: "Missing fields" });
 
-    const timestamp = new Date().toISOString();
-
     // เก็บข้อความแบบเดิม
     const msgRef = db.ref("messages").push();
     await msgRef.set({
       senderId,
       receiverId,
       message,
-      timestamp,
+      timestamp: new Date().toISOString(), // ใช้เวลาปัจจุบัน
     });
 
     // เก็บข้อความลง chats/{senderId_receiverId}/messages
-    const chatId = [senderId, receiverId].sort().join("_"); // สร้าง chat id แบบ 5_6
+    const chatId = [senderId, receiverId].sort().join("_");
     const chatMsgRef = db.ref(`chats/${chatId}/messages`).push();
     await chatMsgRef.set({
       senderId,
       receiverId,
       message,
-      timestamp,
+      timestamp: new Date().toISOString(), // ใช้เวลาปัจจุบันอีกครั้ง
     });
 
     res.json({ success: true });
@@ -886,6 +884,8 @@ app.post("/sendMessage", verifyToken, async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
+
+
 
 // ดึงข้อความทั้งหมดของผู้ใช้
 app.get("/chat/messages", verifyToken, async (req, res) => {
@@ -1111,12 +1111,11 @@ function isWithinRange(datetime, range) {
   }
 }
 
-// 🔹 /stats API
 app.get("/stats", async (req, res) => {
   const range = req.query.range || "today";
 
   try {
-    // ดึงข้อมูลหลักจาก Firebase
+    // ดึงข้อมูลทั้งหมดจาก Firebase
     const [postsSnap, commentsSnap, reportsSnap, likesSnap, bookmarksSnap] = await Promise.all([
       db.ref("posts").once("value"),
       db.ref("comments").once("value"),
@@ -1125,35 +1124,32 @@ app.get("/stats", async (req, res) => {
       db.ref("bookmarks").once("value"),
     ]);
 
-    // เตรียมข้อมูล
     const posts = postsSnap.val() || {};
     const comments = commentsSnap.val() || {};
     const reports = reportsSnap.val() || {};
     const likes = likesSnap.val() || {};
     const bookmarks = bookmarksSnap.val() || {};
 
-    console.log("Posts:", posts);
-    console.log("Comments:", comments);
-    console.log("Reports:", reports);
-
-    // 📊 Filter ตามช่วงเวลา
+    // 📊 กรองข้อมูลตามช่วงเวลา (ดู field datetime หรือ createdAt)
     const filteredPosts = Object.values(posts).filter(
-      (p) => !p.createdAt || isWithinRange(p.createdAt, range)
-    );
-    const filteredComments = Object.values(comments).filter(
-      (c) => !c.createdAt || isWithinRange(c.createdAt, range)
-    );
-    const filteredReports = Object.values(reports).filter(
-      (r) => !r.datetime || isWithinRange(r.datetime, range)
+      (p) => p.datetime && isWithinRange(p.datetime, range)
     );
 
-    // ❤️ นับ likes (รวมทุก post)
+    const filteredComments = Object.values(comments).filter(
+      (c) => c.createdAt && isWithinRange(c.createdAt, range)
+    );
+
+    const filteredReports = Object.values(reports).filter(
+      (r) => r.datetime && isWithinRange(r.datetime, range)
+    );
+
+    // ❤️ รวมจำนวน likes ทั้งหมด
     let likesCount = 0;
     Object.values(likes).forEach((postLikes) => {
       if (typeof postLikes === "object") likesCount += Object.keys(postLikes).length;
     });
 
-    // 🔖 นับ bookmarks ทั้งหมด
+    // 🔖 รวมจำนวน bookmarks ทั้งหมด
     const bookmarksCount = Object.keys(bookmarks).length;
 
     // 🚨 Breakdown reports
@@ -1170,15 +1166,16 @@ app.get("/stats", async (req, res) => {
       if (breakdown.hasOwnProperty(reason)) breakdown[reason]++;
     });
 
-    // 📈 barData ใช้เป็น mock จากจำนวน post/comment/report
+    // 📈 barData (post / comment / report)
     const barData = [
       filteredPosts.length,
       filteredComments.length,
       filteredReports.length,
     ];
 
-    // ✅ สร้างผลลัพธ์
+    // ✅ สร้างข้อมูลส่งกลับ
     const stats = {
+      range,
       postsCount: filteredPosts.length,
       commentsCount: filteredComments.length,
       reportsCount: filteredReports.length,
@@ -1186,6 +1183,12 @@ app.get("/stats", async (req, res) => {
       bookmarksCount,
       barData,
       reportBreakdown: breakdown,
+      // 🔍 แสดงตัวอย่างข้อมูลจริงด้วย (เพื่อตรวจสอบ)
+      samples: {
+        posts: filteredPosts.slice(0, 3),
+        comments: filteredComments.slice(0, 3),
+        reports: filteredReports.slice(0, 3),
+      },
     };
 
     console.log(`📊 Stats for ${range}:`, stats);
